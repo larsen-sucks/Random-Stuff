@@ -6,4 +6,4 @@ and how with HTML
 make this account bigger than ola-rudra
 follow me pls
 i'm kinda bad at HTML
-give me ideas guys I would rather code in python and stuuf and yeah
+give me ideas guys I would rather code in python and stuff and yeah
