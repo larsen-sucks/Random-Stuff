@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>BFS Maze Visualizer</title>
+<style>
+  :root{
+    --bg:#0f1724; --panel:#0b1220; --muted:#94a3b8; --accent:#06b6d4; --good:#10b981; --bad:#ef4444;
+  }
+  body{margin:0;font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,Arial;background:var(--bg);color:#e6eef8;display:flex;min-height:100vh;align-items:flex-start;justify-content:center;padding:18px;}
+  .app{width:980px;display:grid;grid-template-columns:320px 1fr;gap:18px;}
+  .panel{background:linear-gradient(180deg,#071025 0%, #071827 100%);border-radius:10px;padding:14px;border:1px solid rgba(255,255,255,0.04);box-shadow:0 6px 18px rgba(2,6,23,0.6);}
+  h2{margin:0 0 10px 0;font-size:18px;color:#dbeafe;}
+  .controls{display:flex;flex-direction:column;gap:10px;}
+  label{font-size:13px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;}
+  .row{display:flex;gap:8px;align-items:center;}
+  button{background:var(--accent);border:0;padding:8px 10px;border-radius:8px;color:#042027;font-weight:600;cursor:pointer;}
+  button.ghost{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--muted);font-weight:600;}
+  button.warn{background:var(--bad);color:white;}
+  input[type=range]{width:100%;}
+  .small{font-size:12px;color:var(--muted);}
+  #canvasWrap{background:#071827;border-radius:10px;padding:10px;display:flex;align-items:center;justify-content:center;}
+  canvas{background:#e6eef8;border-radius:6px;box-shadow:0 6px 18px rgba(2,6,23,0.4);}
+  .legend{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
+  .chip{padding:6px 8px;border-radius:8px;font-size:12px;background:rgba(255,255,255,0.04);color:var(--muted);}
+  .chip .dot{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:8px;vertical-align:middle;}
+  .status{margin-top:8px;font-size:13px;color:var(--muted);}
+  .footer{margin-top:12px;font-size:12px;color:var(--muted);}
+  .controls .modes{display:flex;gap:6px;flex-wrap:wrap;}
+  .controls .modes button{flex:1;}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="panel">
+    <h2>BFS Maze Controls</h2>
+    <div class="controls">
+      <label>Grid size
+        <div class="small" id="sizeLabel">30 × 30</div>
+      </label>
+      <input id="sizeRange" type="range" min="10" max="60" value="30" />
+      <label>Animation speed
+        <div class="small" id="speedLabel">50 ms / step</div>
+      </label>
+      <input id="speedRange" type="range" min="10" max="300" value="50" />
+      <div class="row">
+        <button id="genMaze">Generate Maze</button>
+        <button id="clearWalls" class="ghost">Clear</button>
+      </div>
+      <div class="modes">
+        <button id="modeDraw" class="ghost">Draw Walls</button>
+        <button id="modeErase" class="ghost">Erase Walls</button>
+        <button id="modeStart" class="ghost">Set Start</button>
+        <button id="modeEnd" class="ghost">Set End</button>
+      </div>
+      <div class="row">
+        <button id="runBtn">Run BFS</button>
+        <button id="stepBtn" class="ghost">Step</button>
+        <button id="pauseBtn" class="ghost">Pause</button>
+      </div>
+      <div class="row">
+        <button id="resetBtn" class="ghost">Reset Search</button>
+        <button id="randomizeBtn" class="ghost">Random Start/End</button>
+      </div>
+
+      <!-- Show Only Path button -->
+      <div class="row">
+        <button id="showPathOnlyBtn" class="ghost">Show Only Path</button>
+      </div>
+	  
+      <div class="legend">
+        <div class="chip"><span class="dot" style="background:#0b1220;border:2px solid #94a3b8"></span>Wall</div>
+        <div class="chip"><span class="dot" style="background:#ffffff"></span>Empty</div>
+        <div class="chip"><span class="dot" style="background:#06b6d4"></span>Frontier</div>
+        <div class="chip"><span class="dot" style="background:#60a5fa"></span>Visited</div>
+        <div class="chip"><span class="dot" style="background:#10b981"></span>Path</div>
+        <div class="chip"><span class="dot" style="background:#f97316"></span>Start</div>
+        <div class="chip"><span class="dot" style="background:#ef4444"></span>End</div>
+      </div>
+      <div class="status" id="status">Mode: <strong>Draw Walls</strong></div>
+      <div class="footer">Click canvas to edit. Use controls to run BFS and visualize the flood expansion and shortest path.</div>
+    </div>
+  </div>
+
+  <div id="canvasWrap" class="panel">
+    <canvas id="gridCanvas" width="720" height="720" aria-label="Maze canvas"></canvas>
+  </div>
+</div>
+
+<script>
+/* ======= Maze + BFS Visualizer ======= */
+const canvas = document.getElementById('gridCanvas');
+const ctx = canvas.getContext('2d', { alpha: false });
+const sizeRange = document.getElementById('sizeRange');
+const sizeLabel = document.getElementById('sizeLabel');
+const speedRange = document.getElementById('speedRange');
+const speedLabel = document.getElementById('speedLabel');
+const genMazeBtn = document.getElementById('genMaze');
+const clearWallsBtn = document.getElementById('clearWalls');
+const modeDrawBtn = document.getElementById('modeDraw');
+const modeEraseBtn = document.getElementById('modeErase');
+const modeStartBtn = document.getElementById('modeStart');
+const modeEndBtn = document.getElementById('modeEnd');
+const runBtn = document.getElementById('runBtn');
+const stepBtn = document.getElementById('stepBtn');
+const pauseBtn = document.getElementById('pauseBtn');
+const resetBtn = document.getElementById('resetBtn');
+const randomizeBtn = document.getElementById('randomizeBtn');
+const showPathOnlyBtn = document.getElementById('showPathOnlyBtn');
+const statusEl = document.getElementById('status');
+
+let cols = parseInt(sizeRange.value,10);
+let rows = cols;
+let cellSize = Math.floor(canvas.width / cols);
+let grid = [];
+let start = {x:1,y:1};
+let end = {x:cols-2,y:rows-2};
+let mode = 'draw'; // draw, erase, start, end
+let running = false;
+let paused = false;
+let speed = parseInt(speedRange.value,10);
+let bfsState = null; // holds queue, visited, parent, frontier set, etc.
+let showPathOnly = false;
+
+/* Colors */
+const colors = {
+  wall: '#0b1220',
+  empty: '#ffffff',
+  frontier: '#06b6d4',
+  visited: '#60a5fa',
+  path: '#10b981',
+  start: '#f97316',
+  end: '#ef4444',
+  gridLine: '#e2e8f0'
+};
+
+/* Initialize grid */
+function initGrid(c, r) {
+  cols = c; rows = r;
+  cellSize = Math.floor(canvas.width / cols);
+  grid = new Array(rows);
+  for (let y=0;y<rows;y++){
+    grid[y] = new Array(cols);
+    for (let x=0;x<cols;x++){
+      grid[y][x] = { wall: false, visited:false, inFrontier:false, parent:null };
+    }
+  }
+  // surround edges with walls
+  for (let x=0;x<cols;x++){ grid[0][x].wall = true; grid[rows-1][x].wall = true; }
+  for (let y=0;y<rows;y++){ grid[y][0].wall = true; grid[y][cols-1].wall = true; }
+  start = {x:1,y:1};
+  end = {x:cols-2,y:rows-2};
+  bfsState = null;
+  draw();
+}
+
+/* Draw grid */
+function draw() {
+  ctx.fillStyle = '#e6eef8';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  // Precompute path set for quick lookup
+  const pathSet = new Set();
+  if (bfsState && bfsState.path) {
+    for (const p of bfsState.path) pathSet.add(`${p.x},${p.y}`);
+  }
+
+  for (let y=0;y<rows;y++){
+    for (let x=0;x<cols;x++){
+      const cell = grid[y][x];
+      let fill = colors.empty;
+
+      if (showPathOnly) {
+        // Transparent walls (still visible)
+        if (cell.wall) {
+          fill = "rgba(11,18,32)";   // 25% opacity wall
+        } else {
+          const isStart = (x === start.x && y === start.y);
+          const isEnd = (x === end.x && y === end.y);
+          const isPath = pathSet.has(`${x},${y}`);
+
+          if (isStart) fill = colors.start;
+          else if (isEnd) fill = colors.end;
+          else if (isPath) fill = colors.path;
+          else fill = "rgba(255,255,255,0.6)"; // faint empty cells
+        }
+
+      } else {
+        // Normal drawing mode
+        if (cell.wall) fill = colors.wall;
+        else if (cell.inFrontier) fill = colors.frontier;
+        else if (cell.visited) fill = colors.visited;
+        else fill = colors.empty;
+      }
+
+      ctx.fillStyle = fill;
+      ctx.fillRect(x*cellSize, y*cellSize, cellSize, cellSize);
+    }
+  }
+
+  // draw path if exists and not in showPathOnly mode
+  if (!showPathOnly && bfsState && bfsState.path) {
+    for (const p of bfsState.path) {
+      ctx.fillStyle = colors.path;
+      ctx.fillRect(p.x*cellSize, p.y*cellSize, cellSize, cellSize);
+    }
+  }
+
+  // draw start and end (always visible)
+  ctx.fillStyle = colors.start;
+  ctx.fillRect(start.x*cellSize, start.y*cellSize, cellSize, cellSize);
+  ctx.fillStyle = colors.end;
+  ctx.fillRect(end.x*cellSize, end.y*cellSize, cellSize, cellSize);
+
+  // grid lines
+  ctx.strokeStyle = colors.gridLine;
+  ctx.lineWidth = 0.6;
+  for (let x=0;x<=cols;x++){
+    ctx.beginPath();
+    ctx.moveTo(x*cellSize,0);
+    ctx.lineTo(x*cellSize,rows*cellSize);
+    ctx.stroke();
+  }
+  for (let y=0;y<=rows;y++){
+    ctx.beginPath();
+    ctx.moveTo(0,y*cellSize);
+    ctx.lineTo(cols*cellSize,y*cellSize);
+    ctx.stroke();
+  }
+}
+
+/* Maze generator: recursive backtracker on odd cells to create perfect maze */
+function generateMaze() {
+  // initialize all cells as walls
+  for (let y=0;y<rows;y++) for (let x=0;x<cols;x++) grid[y][x].wall = true;
+  // carve passages on odd coordinates
+  function inBounds(x,y){ return x>0 && x<cols-1 && y>0 && y<rows-1; }
+  const stack = [];
+  const sx = 1, sy = 1;
+  grid[sy][sx].wall = false;
+  stack.push({x:sx,y:sy});
+  const dirs = [{x:0,y:-2},{x:2,y:0},{x:0,y:2},{x:-2,y:0}];
+  while (stack.length){
+    const cur = stack[stack.length-1];
+    const neighbors = [];
+    for (const d of dirs){
+      const nx = cur.x + d.x, ny = cur.y + d.y;
+      if (inBounds(nx,ny) && grid[ny][nx].wall) neighbors.push({x:nx,y:ny,dir:d});
+    }
+    if (neighbors.length === 0) { stack.pop(); continue; }
+    const n = neighbors[Math.floor(Math.random()*neighbors.length)];
+    // remove wall between
+    const betweenX = cur.x + n.dir.x/2, betweenY = cur.y + n.dir.y/2;
+    grid[betweenY][betweenX].wall = false;
+    grid[n.y][n.x].wall = false;
+    stack.push({x:n.x,y:n.y});
+  }
+  // ensure start/end are open
+  grid[start.y][start.x].wall = false;
+  grid[end.y][end.x].wall = false;
+  bfsState = null;
+  draw();
+}
+
+/* BFS implementation with animation support */
+function startBFS() {
+  if (running) return;
+  // reset visited/frontier
+  for (let y=0;y<rows;y++) for (let x=0;x<cols;x++){
+    grid[y][x].visited = false;
+    grid[y][x].inFrontier = false;
+    grid[y][x].parent = null;
+  }
+  const q = [];
+  q.push(start);
+  grid[start.y][start.x].inFrontier = true;
+  grid[start.y][start.x].parent = null;
+  bfsState = { queue: q, found:false, path:null };
+  running = true;
+  paused = false;
+  animateBFS();
+}
+
+function animateBFS() {
+  if (!running || paused) return;
+  // process a batch of steps per animation frame depending on speed
+  const stepsPerFrame = Math.max(1, Math.floor(60 / Math.max(1, speed/10)));
+  let stepCount = 0;
+  while (stepCount < stepsPerFrame && running && !paused) {
+    stepBFS();
+    stepCount++;
+  }
+  draw();
+  if (running && !paused) {
+    setTimeout(animateBFS, speed);
+  }
+}
+
+function stepBFS() {
+  if (!bfsState) {
+    startBFS();
+    return;
+  }
+  const q = bfsState.queue;
+  if (q.length === 0) {
+    running = false;
+    statusEl.innerHTML = 'No path found.';
+    return;
+  }
+  const cur = q.shift();
+  grid[cur.y][cur.x].inFrontier = false;
+  grid[cur.y][cur.x].visited = true;
+  // check neighbors (4-directional)
+  const neighbors = [
+    {x:cur.x+1,y:cur.y},
+    {x:cur.x-1,y:cur.y},
+    {x:cur.x,y:cur.y+1},
+    {x:cur.x,y:cur.y-1}
+  ];
+  for (const n of neighbors) {
+    if (n.x < 0 || n.x >= cols || n.y < 0 || n.y >= rows) continue;
+    const cell = grid[n.y][n.x];
+    if (cell.wall) continue;
+    if (cell.visited || cell.inFrontier) continue;
+    cell.parent = {x:cur.x,y:cur.y};
+    cell.inFrontier = true;
+    q.push({x:n.x,y:n.y});
+    // if reached end
+    if (n.x === end.x && n.y === end.y) {
+      bfsState.found = true;
+      // reconstruct path
+      const path = [];
+      let p = {x:end.x,y:end.y};
+      while (p) {
+        path.push(p);
+        const par = grid[p.y][p.x].parent;
+        p = par;
+      }
+      bfsState.path = path; // path from end to start
+      running = false;
+      statusEl.innerHTML = `Path found! Length: ${bfsState.path.length - 1}`;
+      return;
+    }
+  }
+  // update status
+  statusEl.innerHTML = `Exploring... queue: ${q.length}`;
+}
+
+/* Pause / Step / Reset */
+function pauseBFS() { paused = true; running = false; statusEl.innerHTML = 'Paused'; }
+function resumeBFS() { if (bfsState && !bfsState.found) { running = true; paused = false; animateBFS(); statusEl.innerHTML = 'Running'; } }
+function stepOnce() { if (!bfsState) startBFS(); stepBFS(); draw(); }
+function resetSearch() {
+  running = false; paused = false;
+  bfsState = null;
+  for (let y=0;y<rows;y++) for (let x=0;x<cols;x++){
+    grid[y][x].visited = false;
+    grid[y][x].inFrontier = false;
+    grid[y][x].parent = null;
+  }
+  statusEl.innerHTML = 'Search reset';
+  draw();
+}
+
+/* Mouse interactions */
+let mouseDown = false;
+canvas.addEventListener('mousedown', (e) => {
+  mouseDown = true;
+  handleCanvasClick(e);
+});
+canvas.addEventListener('mouseup', () => mouseDown = false);
+canvas.addEventListener('mousemove', (e) => { if (mouseDown) handleCanvasClick(e); });
+canvas.addEventListener('click', handleCanvasClick);
+
+function canvasToCell(e) {
+  const rect = canvas.getBoundingClientRect();
+  const cx = e.clientX - rect.left;
+  const cy = e.clientY - rect.top;
+  const x = Math.floor(cx / cellSize);
+  const y = Math.floor(cy / cellSize);
+  return {x,y};
+}
+
+function handleCanvasClick(e) {
+  const c = canvasToCell(e);
+  if (c.x < 0 || c.x >= cols || c.y < 0 || c.y >= rows) return;
+  if (mode === 'draw') {
+    if ((c.x === start.x && c.y === start.y) || (c.x === end.x && c.y === end.y)) return;
+    grid[c.y][c.x].wall = true;
+  } else if (mode === 'erase') {
+    grid[c.y][c.x].wall = false;
+  } else if (mode === 'start') {
+    if (!grid[c.y][c.x].wall && !(c.x === end.x && c.y === end.y)) {
+      start = {x:c.x,y:c.y};
+    }
+  } else if (mode === 'end') {
+    if (!grid[c.y][c.x].wall && !(c.x === start.x && c.y === start.y)) {
+      end = {x:c.x,y:c.y};
+    }
+  }
+  bfsState = null;
+  draw();
+}
+
+/* UI wiring */
+sizeRange.addEventListener('input', () => {
+  const v = parseInt(sizeRange.value,10);
+  sizeLabel.textContent = `${v} × ${v}`;
+});
+sizeRange.addEventListener('change', () => {
+  const v = parseInt(sizeRange.value,10);
+  initGrid(v, v);
+});
+
+speedRange.addEventListener('input', () => {
+  speed = parseInt(speedRange.value,10);
+  speedLabel.textContent = `${speed} ms / step`;
+});
+
+genMazeBtn.addEventListener('click', () => {
+  // ensure odd dimensions for maze algorithm
+  const c = cols % 2 === 0 ? cols-1 : cols;
+  const r = rows % 2 === 0 ? rows-1 : rows;
+  initGrid(c, r);
+  generateMaze();
+});
+
+clearWallsBtn.addEventListener('click', () => {
+  for (let y=0;y<rows;y++) for (let x=0;x<cols;x++) grid[y][x].wall = false;
+  // re-add border walls
+  for (let x=0;x<cols;x++){ grid[0][x].wall = true; grid[rows-1][x].wall = true; }
+  for (let y=0;y<rows;y++){ grid[y][0].wall = true; grid[y][cols-1].wall = true; }
+  bfsState = null;
+  draw();
+});
+
+modeDrawBtn.addEventListener('click', () => { mode = 'draw'; updateModeUI(); });
+modeEraseBtn.addEventListener('click', () => { mode = 'erase'; updateModeUI(); });
+modeStartBtn.addEventListener('click', () => { mode = 'start'; updateModeUI(); });
+modeEndBtn.addEventListener('click', () => { mode = 'end'; updateModeUI(); });
+
+runBtn.addEventListener('click', () => { if (!running) { startBFS(); } else { resumeBFS(); } });
+pauseBtn.addEventListener('click', () => { pauseBFS(); });
+stepBtn.addEventListener('click', () => { stepOnce(); });
+resetBtn.addEventListener('click', () => { resetSearch(); });
+randomizeBtn.addEventListener('click', () => {
+  // pick random open cells for start and end
+  function randOpen() {
+    for (let attempts=0; attempts<1000; attempts++){
+      const x = 1 + Math.floor(Math.random()*(cols-2));
+      const y = 1 + Math.floor(Math.random()*(rows-2));
+      if (!grid[y][x].wall) return {x,y};
+    }
+    return {x:1,y:1};
+  }
+  start = randOpen();
+  end = randOpen();
+  bfsState = null;
+  draw();
+});
+
+/* Show Only Path button listener */
+showPathOnlyBtn.addEventListener('click', () => {
+  showPathOnly = !showPathOnly;
+  showPathOnlyBtn.classList.toggle('ghost', !showPathOnly);
+  showPathOnlyBtn.textContent = showPathOnly ? "Show Full Maze" : "Show Only Path";
+  draw();
+});
+
+function updateModeUI() {
+  const map = { draw: modeDrawBtn, erase: modeEraseBtn, start: modeStartBtn, end: modeEndBtn };
+  for (const k in map) map[k].classList.toggle('ghost', k !== mode);
+  statusEl.innerHTML = `Mode: <strong>${mode === 'draw' ? 'Draw Walls' : mode === 'erase' ? 'Erase Walls' : mode === 'start' ? 'Set Start' : 'Set End'}</strong>`;
+}
+
+/* Initialize */
+initGrid(cols, rows);
+updateModeUI();
+speedLabel.textContent = `${speed} ms / step`;
+
+/* Keyboard shortcuts */
+window.addEventListener('keydown', (e) => {
+  if (e.key === ' ') { e.preventDefault(); if (running && !paused) pauseBFS(); else resumeBFS(); }
+  if (e.key === 'r') { genMazeBtn.click(); }
+  if (e.key === 'c') { clearWallsBtn.click(); }
+  if (e.key === 's') { mode = 'start'; updateModeUI(); }
+  if (e.key === 'e') { mode = 'end'; updateModeUI(); }
+  if (e.key === 'd') { mode = 'draw'; updateModeUI(); }
+  if (e.key === 'x') { mode = 'erase'; updateModeUI(); }
+});
+</script>
+</body>
+</html>
