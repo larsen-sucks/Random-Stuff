@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Text Piano Player</title>
+<style>
+  body {
+    font-family: system-ui, sans-serif;
+    margin: 0;
+    padding: 16px;
+    background: #111;
+    color: #eee;
+  }
+  h1 {
+    margin-top: 0;
+    font-size: 20px;
+  }
+  textarea {
+    width: 100%;
+    height: 120px;
+    font-family: monospace;
+    font-size: 14px;
+    padding: 8px;
+    box-sizing: border-box;
+  }
+  .controls {
+    margin-top: 8px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  input, button {
+    padding: 4px 8px;
+    font-size: 14px;
+  }
+  small {
+    color: #aaa;
+  }
+</style>
+</head>
+<body>
+<h1>Text → Piano Player</h1>
+
+<p><small>Format: space‑separated notes like <code>C4 D4 E4 F4 G4</code> or with durations <code>C4q D4h Rq</code> (R = rest).</small></p>
+
+<textarea id="score">C4q D4q E4q F4q G4h</textarea>
+
+<div class="controls">
+  <label>BPM:
+    <input id="bpm" type="number" value="120" min="30" max="300" />
+  </label>
+  <button id="playBtn">Play</button>
+  <button id="stopBtn">Stop</button>
+</div>
+
+<script>
+let audioCtx = null;
+let playing = false;
+let scheduled = [];
+
+// Map note name -> MIDI
+const NOTE_OFFSETS = {
+  C: 0, 'C#': 1, Db: 1,
+  D: 2, 'D#': 3, Eb: 3,
+  E: 4,
+  F: 5, 'F#': 6, Gb: 6,
+  G: 7, 'G#': 8, Ab: 8,
+  A: 9, 'A#': 10, Bb: 10,
+  B: 11
+};
+
+// Duration symbols -> beats
+const DURATIONS = {
+  w: 4,  // whole
+  h: 2,  // half
+  q: 1,  // quarter
+  e: 0.5,// eighth
+  s: 0.25// sixteenth
+};
+
+function noteToMidi(token) {
+  // token like "C4", "D#5", "Bb3"
+  const m = token.match(/^([A-Ga-g])([#b]?)(-?\d+)$/);
+  if (!m) return null;
+  const letter = m[1].toUpperCase();
+  const accidental = m[2] || '';
+  const octave = parseInt(m[3], 10);
+  const key = letter + accidental;
+  if (!(key in NOTE_OFFSETS)) return null;
+  return 12 * (octave + 1) + NOTE_OFFSETS[key];
+}
+
+function midiToFreq(midi) {
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+function parseScore(text) {
+  // tokens like "C4q", "D#5h", "Rq"
+  const tokens = text.trim().split(/\s+/).filter(Boolean);
+  const events = [];
+  tokens.forEach(tok => {
+    const m = tok.match(/^(.+?)([whqes])?$/i);
+    if (!m) return;
+    const body = m[1];
+    const durSym = (m[2] || 'q').toLowerCase();
+    const beats = DURATIONS[durSym] ?? 1;
+
+    if (body.toUpperCase() === 'R') {
+      events.push({ type: 'rest', beats });
+    } else {
+      const midi = noteToMidi(body);
+      if (midi != null) {
+        events.push({ type: 'note', midi, beats });
+      }
+    }
+  });
+  return events;
+}
+
+function scheduleNote(time, freq, durationSec) {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+
+  // simple piano-ish envelope
+  const now = time;
+  const attack = 0.01;
+  const decay = 0.15;
+  const sustainLevel = 0.3;
+  const release = 0.2;
+
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(freq, now);
+
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(1.0, now + attack);
+  gain.gain.linearRampToValueAtTime(sustainLevel, now + attack + decay);
+  gain.gain.setValueAtTime(sustainLevel, now + durationSec);
+  gain.gain.linearRampToValueAtTime(0.0001, now + durationSec + release);
+
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  osc.start(now);
+  osc.stop(now + durationSec + release + 0.05);
+
+  scheduled.push(osc);
+}
+
+function playScore() {
+  if (playing) return;
+  const text = document.getElementById('score').value;
+  const bpm = parseInt(document.getElementById('bpm').value, 10) || 120;
+  const events = parseScore(text);
+  if (!events.length) return;
+
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+
+  playing = true;
+  const secPerBeat = 60 / bpm;
+  let t = audioCtx.currentTime + 0.05;
+
+  events.forEach(ev => {
+    const durSec = ev.beats * secPerBeat;
+    if (ev.type === 'note') {
+      const freq = midiToFreq(ev.midi);
+      scheduleNote(t, freq, durSec * 0.9);
+    }
+    t += durSec;
+  });
+
+  // auto-stop flag after last event
+  setTimeout(() => { playing = false; }, (t - audioCtx.currentTime) * 1000 + 200);
+}
+
+function stopScore() {
+  if (!audioCtx) return;
+  scheduled.forEach(osc => {
+    try { osc.stop(); } catch {}
+  });
+  scheduled = [];
+  playing = false;
+}
+
+document.getElementById('playBtn').addEventListener('click', () => {
+  stopScore();
+  playScore();
+});
+
+document.getElementById('stopBtn').addEventListener('click', stopScore);
+</script>
+
+</body>
+</html>
