@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WIRE — one file, one line, everyone on it</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.15.2/mqtt.min.js"></script>
+<style>
+  :root{
+    --ink:#0f1720;
+    --panel:#161f2a;
+    --panel-raised:#1c2733;
+    --line:#2a3644;
+    --amber:#e8a33d;
+    --amber-dim:#8a6a35;
+    --teal:#4fd1c5;
+    --text:#dbe3ea;
+    --muted:#7c8a99;
+    --danger:#d97757;
+    --good:#4fd18a;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    background:var(--ink);
+    background-image:
+      radial-gradient(ellipse at top, rgba(232,163,61,0.05), transparent 60%),
+      repeating-linear-gradient(0deg, rgba(255,255,255,0.012) 0px, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 3px);
+    color:var(--text);
+    font-family:'IBM Plex Mono', monospace;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:24px;
+  }
+  .rig{
+    width:100%;
+    max-width:640px;
+    display:flex;
+    flex-direction:column;
+    gap:14px;
+  }
+  header{
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+    gap:12px;
+    flex-wrap:wrap;
+  }
+  h1{
+    font-family:'Space Mono', monospace;
+    font-weight:700;
+    font-size:22px;
+    letter-spacing:0.04em;
+    margin:0;
+    color:var(--text);
+  }
+  h1 span{ color:var(--amber); }
+  .tagline{
+    margin:2px 0 0;
+    font-size:12px;
+    color:var(--muted);
+    letter-spacing:0.03em;
+  }
+
+  /* signal strip — the signature element */
+  .signal{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:3px;
+    padding:9px 12px;
+    font-size:12px;
+  }
+  .signal .dot{
+    width:9px; height:9px; border-radius:50%;
+    background:var(--muted);
+    flex-shrink:0;
+    box-shadow:0 0 0 0 rgba(232,163,61,0.6);
+  }
+  .signal.connecting .dot{ background:var(--amber); animation:pulse 1.1s infinite; }
+  .signal.connected .dot{ background:var(--good); box-shadow:0 0 0 3px rgba(79,209,138,0.15); }
+  .signal.offline .dot{ background:var(--danger); }
+  @keyframes pulse{
+    0%{ box-shadow:0 0 0 0 rgba(232,163,61,0.55); }
+    70%{ box-shadow:0 0 0 7px rgba(232,163,61,0); }
+    100%{ box-shadow:0 0 0 0 rgba(232,163,61,0); }
+  }
+  .signal .status-text{ color:var(--text); font-weight:500; }
+  .signal .meta{ color:var(--muted); margin-left:auto; }
+  .bars{ display:flex; gap:2px; align-items:flex-end; height:12px; }
+  .bars i{ width:3px; background:var(--line); display:block; border-radius:1px; }
+  .bars i:nth-child(1){height:4px;} .bars i:nth-child(2){height:7px;}
+  .bars i:nth-child(3){height:10px;} .bars i:nth-child(4){height:12px;}
+  .signal.connected .bars i{ background:var(--good); animation:flicker 1.6s infinite ease-in-out; }
+  .signal.connected .bars i:nth-child(2){ animation-delay:0.15s; }
+  .signal.connected .bars i:nth-child(3){ animation-delay:0.3s; }
+  .signal.connected .bars i:nth-child(4){ animation-delay:0.45s; }
+  @keyframes flicker{ 0%,100%{opacity:1;} 50%{opacity:0.35;} }
+
+  .setup{
+    display:flex;
+    gap:8px;
+    flex-wrap:wrap;
+  }
+  .field{
+    flex:1;
+    min-width:120px;
+    display:flex;
+    flex-direction:column;
+    gap:4px;
+  }
+  label{
+    font-size:10px;
+    text-transform:uppercase;
+    letter-spacing:0.08em;
+    color:var(--muted);
+  }
+  input[type=text]{
+    background:var(--panel);
+    border:1px solid var(--line);
+    color:var(--text);
+    font-family:inherit;
+    font-size:13px;
+    padding:8px 10px;
+    border-radius:3px;
+    outline:none;
+  }
+  input[type=text]:focus{ border-color:var(--amber-dim); }
+
+  .frame{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:4px;
+    overflow:hidden;
+  }
+  #log{
+    height:380px;
+    overflow-y:auto;
+    padding:14px;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+  }
+  #log::-webkit-scrollbar{ width:8px; }
+  #log::-webkit-scrollbar-thumb{ background:var(--line); border-radius:4px; }
+
+  .msg{
+    max-width:82%;
+    padding:7px 10px;
+    border-radius:3px;
+    font-size:13px;
+    line-height:1.45;
+    animation:tape 160ms ease-out;
+    word-wrap:break-word;
+  }
+  @keyframes tape{
+    from{ opacity:0; transform:translateY(4px); }
+    to{ opacity:1; transform:translateY(0); }
+  }
+  .msg .who{
+    font-size:10px;
+    text-transform:uppercase;
+    letter-spacing:0.06em;
+    margin-bottom:3px;
+    opacity:0.75;
+  }
+  .msg.them{
+    background:var(--panel-raised);
+    align-self:flex-start;
+    border-left:2px solid var(--amber-dim);
+  }
+  .msg.me{
+    background:rgba(79,209,197,0.08);
+    align-self:flex-end;
+    border-right:2px solid var(--teal);
+    text-align:right;
+  }
+  .msg.sys{
+    align-self:center;
+    background:none;
+    color:var(--muted);
+    font-size:11px;
+    padding:2px 0;
+  }
+  .msg .ts{ opacity:0.5; font-size:10px; margin-left:6px; }
+
+  .composer{
+    display:flex;
+    gap:8px;
+    border-top:1px solid var(--line);
+    padding:10px;
+    background:var(--panel);
+  }
+  .composer input{
+    flex:1;
+    background:var(--ink);
+    border:1px solid var(--line);
+    color:var(--text);
+    font-family:inherit;
+    font-size:14px;
+    padding:10px 12px;
+    border-radius:3px;
+    outline:none;
+  }
+  .composer input:focus{ border-color:var(--amber-dim); }
+  .composer button{
+    background:var(--amber);
+    color:#1a1204;
+    border:none;
+    font-family:'Space Mono', monospace;
+    font-weight:700;
+    font-size:13px;
+    padding:0 18px;
+    border-radius:3px;
+    cursor:pointer;
+    letter-spacing:0.03em;
+  }
+  .composer button:disabled{ background:var(--amber-dim); cursor:not-allowed; color:#3a2f18; }
+  .composer button:hover:not(:disabled){ filter:brightness(1.08); }
+  .composer .attach{
+    background:var(--panel-raised);
+    color:var(--text);
+    border:1px solid var(--line);
+    font-family:'Space Mono', monospace;
+    font-weight:700;
+    font-size:11px;
+    letter-spacing:0.03em;
+    padding:0 14px;
+    flex-shrink:0;
+    border-radius:3px;
+    cursor:pointer;
+  }
+  .composer .attach:hover:not(:disabled){ border-color:var(--amber-dim); }
+  .composer .attach:disabled{
+    background:var(--panel-raised);
+    color:var(--muted);
+    opacity:0.5;
+    cursor:not-allowed;
+  }
+
+  .frame{ position:relative; }
+  .dropzone{
+    position:absolute;
+    inset:0;
+    background:rgba(15,23,32,0.94);
+    border:2px dashed var(--amber);
+    border-radius:4px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-family:'Space Mono', monospace;
+    font-size:13px;
+    letter-spacing:0.03em;
+    color:var(--amber);
+    z-index:5;
+    opacity:0;
+    pointer-events:none;
+    transition:opacity 120ms ease;
+  }
+  .frame.drag-over .dropzone{ opacity:1; pointer-events:auto; }
+
+  .msg.file{ padding:8px; }
+  .file-chip{
+    display:inline-flex;
+    align-items:center;
+    gap:9px;
+    background:var(--panel-raised);
+    border:1px solid var(--line);
+    border-radius:3px;
+    padding:8px 12px 8px 8px;
+    text-decoration:none;
+    color:var(--text);
+    max-width:100%;
+    text-align:left;
+  }
+  .msg.me .file-chip{ background:rgba(79,209,197,0.08); border-color:rgba(79,209,197,0.3); }
+  .file-chip .file-icon{
+    flex-shrink:0;
+    width:34px;
+    height:26px;
+    border-radius:3px;
+    background:var(--line);
+    color:var(--muted);
+    font-family:'Space Mono', monospace;
+    font-size:9px;
+    font-weight:700;
+    letter-spacing:0.02em;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .file-chip .file-meta{ display:flex; flex-direction:column; text-align:left; overflow:hidden; min-width:0; }
+  .file-chip .file-name{ font-size:12px; font-weight:600; word-break:break-all; }
+  .file-chip .file-size{ font-size:10px; color:var(--muted); }
+  .msg img.thumb{
+    max-width:220px;
+    max-height:220px;
+    border-radius:3px;
+    display:block;
+    cursor:zoom-in;
+  }
+
+  footer{
+    font-size:11px;
+    color:var(--muted);
+    text-align:center;
+  }
+  footer a{ color:var(--amber-dim); }
+</style>
+</head>
+<body>
+  <div class="rig">
+    <header>
+      <div>
+        <h1>WIRE<span>_</span></h1>
+        <p class="tagline">one html file — everyone who opens it is on the line</p>
+      </div>
+    </header>
+
+    <div class="signal offline" id="signal">
+      <div class="dot"></div>
+      <span class="status-text" id="statusText">offline</span>
+      <div class="bars"><i></i><i></i><i></i><i></i></div>
+      <span class="meta" id="peerMeta"></span>
+    </div>
+
+    <div class="setup">
+      <div class="field">
+        <label for="name">your handle</label>
+        <input type="text" id="name" placeholder="e.g. jordan" maxlength="20">
+      </div>
+      <div class="field">
+        <label for="channel">channel</label>
+        <input type="text" id="channel" value="wire-demo-01" maxlength="40">
+      </div>
+    </div>
+
+    <div class="frame" id="frame">
+      <div id="log"></div>
+      <div class="dropzone" id="dropzone">drop a file to send it on this channel</div>
+      <div class="composer">
+        <input type="file" id="fileInput" hidden>
+        <button class="attach" id="attachBtn" disabled title="attach a file">FILE</button>
+        <input type="text" id="input" placeholder="connect first…" disabled maxlength="500">
+        <button id="send" disabled>SEND</button>
+      </div>
+    </div>
+
+    <footer>
+      public demo broker (broker.emqx.io) — anyone who knows the channel name can read this. don't send anything private. files capped at 200KB for this demo.
+    </footer>
+  </div>
+
+<script>
+(function(){
+  const BROKER_URL = 'wss://broker.emqx.io:8084/mqtt';
+  const TOPIC_PREFIX = 'wire-html-app/';
+
+  const els = {
+    signal: document.getElementById('signal'),
+    statusText: document.getElementById('statusText'),
+    peerMeta: document.getElementById('peerMeta'),
+    name: document.getElementById('name'),
+    channel: document.getElementById('channel'),
+    log: document.getElementById('log'),
+    input: document.getElementById('input'),
+    send: document.getElementById('send'),
+    frame: document.getElementById('frame'),
+    dropzone: document.getElementById('dropzone'),
+    fileInput: document.getElementById('fileInput'),
+    attachBtn: document.getElementById('attachBtn'),
+  };
+
+  const MAX_FILE_BYTES = 200 * 1024; // public broker + base64 overhead — keep it small for the demo
+
+  const clientId = 'wire_' + Math.random().toString(16).slice(2, 10);
+  let client = null;
+  let currentTopic = null;
+  let seenPeers = new Set();
+
+  function setStatus(state, text){
+    els.signal.className = 'signal ' + state;
+    els.statusText.textContent = text;
+  }
+
+  function formatBytes(n){
+    if (n < 1024) return n + ' B';
+    if (n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+    return (n/(1024*1024)).toFixed(1) + ' MB';
+  }
+
+  // kind: 'sys' | 'text' | 'file'. side: 'me' | 'them' (ignored for sys).
+  function addMessage({who, text, ts, kind, side, file}){
+    const div = document.createElement('div');
+
+    if (kind === 'sys') {
+      div.className = 'msg sys';
+      div.textContent = text;
+      els.log.appendChild(div);
+      els.log.scrollTop = els.log.scrollHeight;
+      return;
+    }
+
+    div.className = 'msg ' + side + (kind === 'file' ? ' file' : '');
+
+    const whoEl = document.createElement('div');
+    whoEl.className = 'who';
+    whoEl.textContent = who;
+    div.appendChild(whoEl);
+
+    if (kind === 'file' && file) {
+      const dataUrl = 'data:' + file.mime + ';base64,' + file.data;
+      if (file.mime.startsWith('image/')) {
+        const img = document.createElement('img');
+        img.className = 'thumb';
+        img.src = dataUrl;
+        img.title = file.name + ' — click to open full size';
+        img.addEventListener('click', () => window.open(dataUrl, '_blank'));
+        div.appendChild(img);
+      } else {
+        const a = document.createElement('a');
+        a.className = 'file-chip';
+        a.href = dataUrl;
+        a.download = file.name;
+        const icon = document.createElement('span');
+        icon.className = 'file-icon';
+        icon.textContent = 'FILE';
+        const meta = document.createElement('span');
+        meta.className = 'file-meta';
+        const nameEl = document.createElement('span');
+        nameEl.className = 'file-name';
+        nameEl.textContent = file.name;
+        const sizeEl = document.createElement('span');
+        sizeEl.className = 'file-size';
+        sizeEl.textContent = formatBytes(file.size);
+        meta.appendChild(nameEl);
+        meta.appendChild(sizeEl);
+        a.appendChild(icon);
+        a.appendChild(meta);
+        div.appendChild(a);
+      }
+    } else {
+      const bodyEl = document.createElement('div');
+      bodyEl.textContent = text;
+      div.appendChild(bodyEl);
+    }
+
+    const tsEl = document.createElement('span');
+    tsEl.className = 'ts';
+    tsEl.textContent = new Date(ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    div.appendChild(tsEl);
+
+    els.log.appendChild(div);
+    els.log.scrollTop = els.log.scrollHeight;
+  }
+
+  function updatePeerCount(fromClientId){
+    if (fromClientId && fromClientId !== clientId) {
+      seenPeers.add(fromClientId);
+      els.peerMeta.textContent = seenPeers.size + ' other' + (seenPeers.size === 1 ? '' : 's') + ' seen';
+    }
+  }
+
+  function connect(){
+    const handle = (els.name.value || 'anon').trim().slice(0, 20);
+    const channel = (els.channel.value || 'lobby').trim().replace(/[^a-zA-Z0-9-_]/g, '-').slice(0, 40);
+    if (!handle || !channel) return;
+
+    if (client) { client.end(true); }
+    seenPeers.clear();
+    els.log.innerHTML = '';
+    currentTopic = TOPIC_PREFIX + channel;
+
+    setStatus('connecting', 'connecting…');
+    els.input.disabled = true;
+    els.send.disabled = true;
+    els.attachBtn.disabled = true;
+
+    client = mqtt.connect(BROKER_URL, { clientId, clean: true, reconnectPeriod: 2000 });
+
+    client.on('connect', () => {
+      setStatus('connected', 'on the wire · #' + channel);
+      els.input.disabled = false;
+      els.send.disabled = false;
+      els.attachBtn.disabled = false;
+      client.subscribe(currentTopic);
+      publish({kind:'sys', text: handle + ' joined #' + channel});
+    });
+
+    client.on('reconnect', () => setStatus('connecting', 'reconnecting…'));
+    client.on('close', () => setStatus('offline', 'offline'));
+    client.on('error', (err) => setStatus('offline', 'error — check console'));
+
+    client.on('message', (topic, payload) => {
+      if (topic !== currentTopic) return;
+      try {
+        const data = JSON.parse(payload.toString());
+        updatePeerCount(data.clientId);
+        const side = data.clientId === clientId ? 'me' : 'them';
+        if (data.kind === 'sys') {
+          addMessage({kind:'sys', text: data.text, ts: data.ts});
+        } else if (data.kind === 'file') {
+          addMessage({kind:'file', side, who: data.name, ts: data.ts, file: data.file});
+        } else {
+          addMessage({kind:'text', side, who: data.name, text: data.text, ts: data.ts});
+        }
+      } catch(e) { /* ignore malformed payloads */ }
+    });
+  }
+
+  function publish({kind, text, file}){
+    if (!client || !client.connected) return;
+    const handle = (els.name.value || 'anon').trim().slice(0, 20);
+    const payload = JSON.stringify({
+      clientId,
+      name: handle,
+      text,
+      file,
+      ts: Date.now(),
+      kind: kind || 'text'
+    });
+    client.publish(currentTopic, payload);
+  }
+
+  function sendMessage(){
+    const text = els.input.value.trim();
+    if (!text || !client || !client.connected) return;
+    publish({kind:'text', text});
+    els.input.value = '';
+  }
+
+  function handleFiles(fileList){
+    if (!client || !client.connected) {
+      addMessage({kind:'sys', text: 'connect first before sending a file', ts: Date.now()});
+      return;
+    }
+    Array.from(fileList).forEach((f) => {
+      if (f.size > MAX_FILE_BYTES) {
+        addMessage({kind:'sys', text: f.name + ' is ' + formatBytes(f.size) + ' — over the ' + formatBytes(MAX_FILE_BYTES) + ' demo cap, skipped', ts: Date.now()});
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = reader.result.split(',')[1];
+        publish({
+          kind: 'file',
+          file: { name: f.name, mime: f.type || 'application/octet-stream', size: f.size, data: base64 }
+        });
+      };
+      reader.onerror = () => {
+        addMessage({kind:'sys', text: 'could not read ' + f.name, ts: Date.now()});
+      };
+      reader.readAsDataURL(f);
+    });
+  }
+
+  els.send.addEventListener('click', sendMessage);
+  els.input.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
+  els.name.addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
+  els.channel.addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
+
+  // auto-connect once a handle is present, on first blur/enter — simplest UX for a demo
+  els.name.addEventListener('blur', () => { if (!client && els.name.value.trim()) connect(); });
+
+  els.attachBtn.addEventListener('click', () => els.fileInput.click());
+  els.fileInput.addEventListener('change', () => {
+    handleFiles(els.fileInput.files);
+    els.fileInput.value = ''; // allow re-selecting the same file later
+  });
+
+  let dragDepth = 0;
+  els.frame.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    dragDepth++;
+    els.frame.classList.add('drag-over');
+  });
+  els.frame.addEventListener('dragover', (e) => e.preventDefault());
+  els.frame.addEventListener('dragleave', () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) els.frame.classList.remove('drag-over');
+  });
+  els.frame.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragDepth = 0;
+    els.frame.classList.remove('drag-over');
+    if (e.dataTransfer.files && e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+  });
+
+  addMessage({kind:'sys', text: 'enter a handle above to join the channel'});
+})();
+</script>
+</body>
+</html>
